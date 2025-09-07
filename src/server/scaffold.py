@@ -3,17 +3,19 @@ import torch
 from typing import Dict, List
 
 class ScaffoldServer:
-
     def __init__(self, global_model: torch.nn.Module, clients: List, *, device: str = "cuda"):
         self.device = torch.device(device)
         self.global_model = global_model.to(self.device)
         self.clients = clients
 
         with torch.no_grad():
+            self.param_names = [name for name, _ in self.global_model.named_parameters()]
             self.c_global: Dict[str, torch.Tensor] = {
-                k: torch.zeros_like(v, device=self.device)
-                for k, v in self.global_model.state_dict().items()
+                name: torch.zeros_like(param, device=self.device)
+                for name, param in self.global_model.named_parameters()
             }
+
+        self.total_samples_all = sum(getattr(c, "num_samples")() for c in self.clients)
 
     def _global_state(self) -> Dict[str, torch.Tensor]:
         return {k: v.detach().cpu() for k, v in self.global_model.state_dict().items()}
@@ -33,12 +35,12 @@ class ScaffoldServer:
                 client.set_global_weights(g_state)
             else:
                 client.model.load_state_dict({k: v.to(client.device) for k, v in g_state.items()}, strict=True)
-
             if hasattr(client, "set_global_control"):
                 client.set_global_control(c_state)
             else:
                 with torch.no_grad():
-                    client.c_global = {k: v.to(client.device) for k, v in c_state.items()}
+                    for name, _ in client.model.named_parameters():
+                        client.c_global[name].copy_(c_state[name].to(client.device))
 
     def _aggregate_state(self, payloads: List[Dict]) -> Dict[str, torch.Tensor]:
         total = sum(p["num_samples"] for p in payloads)
@@ -54,27 +56,18 @@ class ScaffoldServer:
         return new_state
 
     def _aggregate_delta_c(self, payloads: List[Dict]) -> Dict[str, torch.Tensor]:
-        total = sum(p["num_samples"] for p in payloads)
-        keys = None
-        for p in payloads:
-            if "delta_c" in p and p["delta_c"] is not None:
-                keys = p["delta_c"].keys()
-                break
-        if keys is None:
+        if self.total_samples_all <= 0:
             return {}
+        agg = {name: None for name in self.param_names}
+        for p in payloads:
+            if "delta_c" not in p or p["delta_c"] is None:
+                continue
+            w = p["num_samples"] / self.total_samples_all
+            for name in self.param_names:
+                dc = p["delta_c"][name]
+                agg[name] = dc * w if agg[name] is None else agg[name] + dc * w
 
-        agg = {}
-        for k in keys:
-            acc = None
-            for p in payloads:
-                if "delta_c" not in p or p["delta_c"] is None:
-                    continue
-                w = p["num_samples"] / total
-                t = p["delta_c"][k]
-                acc = t * w if acc is None else acc + t * w
-            if acc is not None:
-                agg[k] = acc
-        return agg
+        return {name: t for name, t in agg.items() if t is not None}
 
     def aggregate(self, payloads: List[Dict]) -> None:
         new_state = self._aggregate_state(payloads)
@@ -83,8 +76,8 @@ class ScaffoldServer:
         delta_c_agg = self._aggregate_delta_c(payloads)
         if delta_c_agg:
             with torch.no_grad():
-                for k, v in delta_c_agg.items():
-                    self.c_global[k].add_(v.to(self.device))
+                for name, v in delta_c_agg.items():
+                    self.c_global[name].add_(v.to(self.device))
 
     def run_round(self, *, fraction: float = 1.0, local_epochs: int = 1) -> Dict:
         selected = self.select_clients(fraction)
@@ -103,9 +96,7 @@ class ScaffoldServer:
         model.eval()
         loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
-        total = 0
-        correct = 0
-        total_loss = 0.0
+        total = 0; correct = 0; total_loss = 0.0
         for x, y in loader:
             x, y = x.to(dev), y.to(dev)
             logits = model(x)
