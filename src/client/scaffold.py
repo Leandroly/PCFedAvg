@@ -41,7 +41,7 @@ class ScaffoldClient:
         loader = self._loader()
 
         with torch.no_grad():
-            w0 = {k: v.clone() for k, v in self.model.state_dict().items()}
+            x = {k: v.clone() for k, v in self.model.state_dict().items()}
         
         K = 0
         for _ in range(local_epochs):
