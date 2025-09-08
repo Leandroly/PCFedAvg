@@ -4,7 +4,7 @@ from torch import optim, nn
 DATASET = {
     "name": "mnist",
     "root": "./data",
-    "partition": "noniid",
+    "partition": "iid",
     "dirichlet_alpha": 0.1,
     "num_clients": 20,
 }

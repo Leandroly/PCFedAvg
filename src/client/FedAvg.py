@@ -12,7 +12,7 @@ class FedAvgClient:
         self.lr = lr
 
     def set_global_weights(self, state_dict):
-        self.model.load_state_dict(state_dict, strict=True)
+        self.model.load_state_dict({k:v.to(self.device) for k,v in state_dict.items()}, strict=True)
 
     def get_state(self):
         return {k: v.detach().cpu() for k, v in self.model.state_dict().items()}

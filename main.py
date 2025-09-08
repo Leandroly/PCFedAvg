@@ -101,7 +101,7 @@ def main():
 
     plt.xlabel("Round")
     plt.ylabel("Loss")
-    plt.title("SCAFFOLD: Loss vs Round (mean over runs)")
+    plt.title("SCAFFOLD: Noniid")
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
