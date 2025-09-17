@@ -19,16 +19,29 @@ class FedVIServer:
         m = max(1, int(round(fraction * len(self.clients))))
         return random.sample(self.clients, m)
 
-    def compute_xbar(self) -> Dict[str, torch.Tensor]:
+    def compute_xbar(self, selected_clients: List = None, weighted: bool = True) -> Dict[str, torch.Tensor]:
+        if selected_clients is None:
+            idxs = list(range(len(self.clients)))
+        else:
+            idxs = [c.cid for c in selected_clients]
+
+        # n_i
+        if weighted:
+            ws = [self.clients[i].num_samples() for i in idxs]
+            mr = float(sum(ws))
+        else:
+            ws = [1.0 for _ in idxs]
+            mr = float(len(idxs))
+
         keys = self.blocks[0].keys()
         xbar: Dict[str, torch.Tensor] = {}
         with torch.no_grad():
             for k in keys:
                 acc = None
-                for b in self.blocks:
-                    t = b[k]
-                    acc = t.clone() if acc is None else acc.add(t)
-                xbar[k] = acc.div(float(len(self.blocks)))
+                for i, w in zip(idxs, ws):
+                    t = self.blocks[i][k]
+                    acc = (t * w) if acc is None else (acc + t * w)
+                xbar[k] = acc / mr
         return xbar
 
     def send_xbar_only(self, selected_clients: List, xbar: Dict[str, torch.Tensor]):
@@ -49,7 +62,7 @@ class FedVIServer:
     ) -> Dict:
         selected = self.select_clients(fraction=fraction)
 
-        xbar = self.compute_xbar()
+        xbar = self.compute_xbar(selected, weighted=True)
         self.send_xbar_only(selected, xbar)
 
         payloads = []

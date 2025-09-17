@@ -23,7 +23,7 @@ def set_seed(seed: int):
 
 
 def _eta_schedule(r: int) -> float:
-    return max(0.1, 0.6 / (r ** 0.5))
+    return 0.2
 
 
 def _lambda_schedule(r: int) -> float:

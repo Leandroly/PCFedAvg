@@ -30,6 +30,9 @@ class FedVIClient:
     def _loader(self):
         return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True, drop_last=False)
 
+    def num_samples(self) -> int:
+        return len(self.dataset)
+    
     def train_one_round(
         self,
         *,

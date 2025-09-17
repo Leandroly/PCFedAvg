@@ -1,17 +1,17 @@
-# main_scaffold_avg.py
+# main_scaffold_vi_personal.py
 import torch, random, numpy as np
 import matplotlib.pyplot as plt
 import copy
 
 from src.utils.config import DATASET, MODEL, TRAINING, OPTIMIZER, LOSS_FN
 from src.utils.models import OneNN
-from src.client.Scaffold import ScaffoldClient
-from src.server.Scaffold import ScaffoldServer
+from src.client.ScaffoldVI import ScaffoldVIClient
+from src.server.ScaffoldVI import ScaffoldVIServer
 from generate_data import mnist_subsets
 
 SAMPLE_ROUNDS = [0, 10, 20, 30, 40, 50]
 KS = [1, 5, 10]
-REPEATS = 2  # 重复次数
+REPEATS = 2
 
 
 def set_seed(seed: int):
@@ -22,14 +22,52 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
-def run_scaffold_with_k(k_value, init_state, train_subsets, testset, device):
-    global_model = OneNN(in_dim=MODEL["in_dim"], num_classes=MODEL["num_classes"])
-    global_model.load_state_dict(copy.deepcopy(init_state))
+def eta_schedule(r: int) -> float:
+    return 0.2
+
+
+def _zeros_like_state(state_dict: dict):
+    return {k: torch.zeros_like(v, device="cpu") for k, v in state_dict.items()}
+
+
+def print_block(state_dict: dict, client_id: int, max_show: int = 5, ci_norm: float | None = None):
+    header = f"---- Client[{client_id}] block snapshot"
+    if ci_norm is not None:
+        header += f" | ||c_i||={ci_norm:.4f}"
+    print(header + " ----")
+    for name, t in state_dict.items():
+        flat = t.view(-1).float()
+        head = ", ".join(f"{v:.4f}" for v in flat[:max_show].tolist())
+        tail = " ..." if flat.numel() > max_show else ""
+        print(f"{name:20s} shape={list(t.shape)!r}  values=[{head}{tail}]")
+    print("---------------------------------------------------")
+
+
+def evaluate_personalized_common_test(server, clients, testset, *, batch_size, device, loss_fn):
+    results = []
+    for i, c in enumerate(clients):
+        block_i = server.get_block(i)  # CPU tensors
+        c.set_broadcast(block_i, _zeros_like_state(block_i))
+        res = c.evaluate(testset, batch_size=batch_size, device=device, loss_fn=loss_fn)
+        results.append(res)
+
+    loss = float(np.mean([r["loss"] for r in results]))
+    acc  = float(np.mean([r["accuracy"] for r in results]))
+    tot  = int(np.sum([r["num_samples"] for r in results]))
+    return {"loss": loss, "accuracy": acc, "num_samples": tot}, results
+
+def lambda_schedule(r: int) -> float:
+    return 0.1
+
+
+def run_scaffoldvi_personal_with_k(k_value, init_state, train_subsets, testset, device):
+    base_model = OneNN(in_dim=MODEL["in_dim"], num_classes=MODEL["num_classes"])
+    base_model.load_state_dict(copy.deepcopy(init_state))
 
     clients = [
-        ScaffoldClient(
+        ScaffoldVIClient(
             cid=i,
-            model=global_model,
+            model=base_model,
             dataset=train_subsets[i],
             lr=OPTIMIZER["lr"],
             batch_size=TRAINING["train_batch_size"],
@@ -37,31 +75,49 @@ def run_scaffold_with_k(k_value, init_state, train_subsets, testset, device):
         )
         for i in range(DATASET["num_clients"])
     ]
-    server = ScaffoldServer(global_model, clients, device=device)
+    server = ScaffoldVIServer(base_model, clients, device=device, gamma_g=1.0)
 
-    # baseline r=0
-    metrics = server.evaluate_global(
-        dataset=testset, batch_size=TRAINING["eval_batch_size"],
-        device=device, loss_fn=LOSS_FN,
+    metrics, _ = evaluate_personalized_common_test(
+        server, clients, testset,
+        batch_size=TRAINING["eval_batch_size"], device=device, loss_fn=LOSS_FN
     )
     losses = {0: metrics["loss"]}
-    print(f"[SCAFFOLD k={k_value}, Round 0] acc={metrics['accuracy']:.4f} loss={metrics['loss']:.4f}")
+    print(f"[ScaffoldVI-Personal k={k_value}, Round 0] acc={metrics['accuracy']:.4f} loss={metrics['loss']:.4f}")
 
     for r in range(1, TRAINING["rounds"] + 1):
-        stats = server.run_round(fraction=TRAINING["fraction"], local_epochs=k_value)
-        print(f"[k={k_value}, Round {r}] selected={stats['selected']} | total_samples={stats['total_samples']}")
+        eta_r = eta_schedule(r)
+        lam_r = lambda_schedule(r)
+        stats = server.run_round(
+            fraction=TRAINING["fraction"],
+            local_epochs=k_value,
+            eta_r=eta_r,
+            lambda_reg=lam_r,
+            round_idx=r,
+        )
+        reg_val = server.global_reg_value(lam_r)
+        print(f"[k={k_value}, Round {r}] selected={stats['selected']} | "
+                f"samples={stats['total_samples']} | eta={eta_r:.3f} | lambda={lam_r:.3f} | "
+                f"RegSum={reg_val:.3e}")
 
-        metrics = server.evaluate_global(
-            dataset=testset, batch_size=TRAINING["eval_batch_size"],
-            device=device, loss_fn=LOSS_FN,
+        if r % 10 == 0:
+            for idx in range(DATASET["num_clients"]):
+                block = server.get_block(idx)
+                ci = server.get_ci(idx)
+                ci_norm = float(sum(v.detach().float().norm().item() for v in ci.values()))
+                print_block(block, client_id=idx, max_show=5, ci_norm=ci_norm)
+
+        metrics, _ = evaluate_personalized_common_test(
+            server, clients, testset,
+            batch_size=TRAINING["eval_batch_size"], device=device, loss_fn=LOSS_FN
         )
         if r in SAMPLE_ROUNDS:
             losses[r] = metrics["loss"]
 
         if (r % 10 == 0) or (r == TRAINING["rounds"]):
-            print(f"[SCAFFOLD k={k_value}, Round {r}] acc={metrics['accuracy']:.4f} loss={metrics['loss']:.4f}")
+            print(f"[ScaffoldVI-Personal k={k_value}, Round {r}] "
+                  f"acc={metrics['accuracy']:.4f} loss={metrics['loss']:.4f}")
 
-    return [losses[r] for r in SAMPLE_ROUNDS]  # 只返回 6 个点
+    return [losses[r] for r in SAMPLE_ROUNDS]
 
 
 def main():
@@ -89,19 +145,18 @@ def main():
         init_state = copy.deepcopy(base_model.state_dict())
 
         for k in KS:
-            curve = run_scaffold_with_k(k, init_state, train_subsets, testset, device)
+            curve = run_scaffoldvi_personal_with_k(k, init_state, train_subsets, testset, device)
             all_results[k].append(curve)
 
-    # —— 画均值 —— #
     plt.figure(figsize=(8, 6))
     for k in KS:
-        arr = np.array(all_results[k])  # shape: [REPEATS, 6]
-        mean = arr.mean(axis=0)         # 直接取均值
+        arr = np.array(all_results[k])
+        mean = arr.mean(axis=0)
         plt.plot(SAMPLE_ROUNDS, mean, marker="o", label=f"k={k}")
 
     plt.xlabel("Round")
-    plt.ylabel("Loss")
-    plt.title("SCAFFOLD: Noniid")
+    plt.ylabel("Personalized Loss (avg over clients)")
+    plt.title("ScaffoldVI-Personal (m blocks, no cross-client averaging)")
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
