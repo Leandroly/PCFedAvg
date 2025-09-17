@@ -35,9 +35,7 @@ class FedVIClient:
         *,
         local_epochs: int = 1,
         eta_r: float = 0.2,
-        lambda_reg: float = 0.0,
-        prox_cfg: dict | None = None,
-        clip_grad: float | None = None,
+        lambda_reg: float = 0.1,
     ):
         self.model.train()
         opt = torch.optim.SGD(filter(lambda p: p.requires_grad, self.model.parameters()), lr=self.lr)
@@ -49,38 +47,25 @@ class FedVIClient:
                 x, y = x.to(self.device), y.to(self.device)
                 opt.zero_grad()
 
+                # ∇f̃_i
                 logits = self.model(x)
                 loss = loss_fn(logits, y)
-                loss.backward()
-
-                Fi_grads: Dict[str, torch.Tensor] = {}
-                if prox_cfg is not None:
-                    t = prox_cfg.get("type", "").lower()
-                    if t == "fedprox":
-                        mu = float(prox_cfg["mu"])
-                        assert self._xbar is not None, "xbar must be provided for FedProx."
-                        with torch.no_grad():
-                            for name, p in self.model.named_parameters():
-                                if name in self.owned_keys:
-                                    Fi_grads[name] = mu * (p.data - self._xbar[name])
-                    elif t == "custom":
-                        Fi_grads = prox_cfg["prox_fn"](self.model, self._xbar, self.owned_keys)
+                loss.backward() # p.grad = ∇f̃_i
 
                 with torch.no_grad():
                     for name, p in self.model.named_parameters():
-                        if not p.requires_grad or p.grad is None:
+                        if not p.requires_grad or p.grad is None or name not in self.owned_keys:
                             continue
-                        g = eta_r * p.grad
-                        if name in Fi_grads:
-                            g.add_(Fi_grads[name].to(self.device))
-                        if (lambda_reg > 0.0) and (self._xbar is not None) and (name in self.owned_keys):
-                            g.add_(lambda_reg * (p.data - self._xbar[name]))
+
+                        # Fi = ∇f̃_i + λ(x - x̄)
+                        Fi = p.grad.clone()
+                        if lambda_reg > 0.0 and self._xbar is not None:
+                            Fi.add_(lambda_reg * (p.data - self._xbar[name].to(p.device)))
+
+                        # g = η_r * p.grad + Fi
+                        g = Fi + eta_r * p.grad
                         p.grad.copy_(g)
-
-                    if clip_grad is not None:
-                        torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, self.model.parameters()),
-                                                       max_norm=clip_grad)
-
+                
                 opt.step()
 
         return {

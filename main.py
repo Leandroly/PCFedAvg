@@ -30,14 +30,16 @@ def _lambda_schedule(r: int) -> float:
     return 0.1
 
 
-def _print_block(block_state: dict, max_show: int = 5):
-    print("---- Client[0] block snapshot ----")
-    for name, t in block_state.items():
-        flat = t.view(-1).float()
-        head = ", ".join([f"{v:.4f}" for v in flat[:max_show].tolist()])
-        tail = " ..." if flat.numel() > max_show else ""
-        print(f"{name:20s} shape={list(t.shape)!r}  values=[{head}{tail}]")
-    print("-----------------------------------")
+def _print_all_blocks(clients, max_show: int = 5):
+    for c in clients:
+        state = c.get_block_state()
+        print(f"---- Client[{c.cid}] block snapshot ----")
+        for name, t in state.items():
+            flat = t.view(-1).float()
+            head = ", ".join([f"{v:.4f}" for v in flat[:max_show].tolist()])
+            tail = " ..." if flat.numel() > max_show else ""
+            print(f"{name:20s} shape={list(t.shape)!r}  values=[{head}{tail}]")
+        print("---------------------------------------------------")
 
 
 def run_fedvi_with_k(k_value, init_state, train_subsets, testset, device):
@@ -76,15 +78,12 @@ def run_fedvi_with_k(k_value, init_state, train_subsets, testset, device):
             local_epochs=k_value,
             eta_r=eta_r,
             lambda_reg=lam_r,
-            prox_cfg=None,
         )
         print(f"[k={k_value}, Round {r}] selected={stats['selected']} | "
-              f"total_samples={stats['total_samples']} | eta={eta_r:.3f} | "
-              f"lambda={lam_r:.3f} | RegSum={stats['reg_value']:.3e}")
+              f"total_samples={stats['total_samples']} | eta={eta_r:.3f} | lambda={lam_r:.3f}")
 
         if r % 10 == 0:
-            block0 = clients[0].get_block_state()
-            _print_block(block0, max_show=5)
+            _print_all_blocks(clients, max_show=5)
 
         metrics = server.evaluate_global(
             dataset=testset, batch_size=TRAINING["eval_batch_size"],
@@ -135,7 +134,7 @@ def main():
 
     plt.xlabel("Round")
     plt.ylabel("Loss")
-    plt.title("FedVI (VI-regularized FedAvg)")
+    plt.title("FedVI (VI-regularized, m personalized blocks)")
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
