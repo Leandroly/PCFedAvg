@@ -57,6 +57,7 @@ def run_fedvi_with_k(k_value, init_state, train_subsets, testset, device):
             batch_size=TRAINING["train_batch_size"],
             device=device,
             owned_keys=owned_keys,
+            m_total=DATASET["num_clients"],   # ★ 关键新增：传入总客户端数 m
         )
         for i in range(DATASET["num_clients"])
     ]
@@ -75,7 +76,7 @@ def run_fedvi_with_k(k_value, init_state, train_subsets, testset, device):
 
         stats = server.run_round(
             fraction=TRAINING["fraction"],
-            local_epochs=k_value,
+            local_steps=k_value,
             eta_r=eta_r,
             lambda_reg=lam_r,
         )
