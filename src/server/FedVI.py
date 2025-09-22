@@ -7,12 +7,12 @@ from src.utils.logger import TraceLogger, vectorize_owned
 
 
 class FedVIServer:
-    def __init__(self, global_model: torch.nn.Module, clients: List, *, device: str):
+    def __init__(self, global_model: torch.nn.Module, clients: List, *, device: str, overwrite=False):
         self.device = torch.device(device)
         self.global_model = global_model.to(self.device)
         self.clients = clients
         self._round = 0
-        self.logger = TraceLogger(log_file="fedvi_trace.log", overwrite=True)
+        self.logger = TraceLogger(log_file="fedvi_trace.log", overwrite=overwrite)
 
         # 按客户端缓存“上一轮各自块”的参数（owned_keys 子集）
         self.blocks: List[Dict[str, torch.Tensor]] = []

@@ -10,7 +10,7 @@ from src.server.FedVI import FedVIServer
 from generate_data import mnist_subsets
 
 SAMPLE_ROUNDS = [0, 10, 20, 30, 40, 50]
-KS = [1, 5, 10]
+KS = [2, 5, 10]
 REPEATS = 2
 
 
@@ -42,7 +42,7 @@ def _print_all_blocks(clients, max_show: int = 5):
         print("---------------------------------------------------")
 
 
-def run_fedvi_with_k(k_value, init_state, train_subsets, testset, device):
+def run_fedvi_with_k(k_value, init_state, train_subsets, testset, device, rep, overwrite=False):
     global_model = OneNN(in_dim=MODEL["in_dim"], num_classes=MODEL["num_classes"])
     global_model.load_state_dict(copy.deepcopy(init_state))
 
@@ -61,7 +61,8 @@ def run_fedvi_with_k(k_value, init_state, train_subsets, testset, device):
         )
         for i in range(DATASET["num_clients"])
     ]
-    server = FedVIServer(global_model, clients, device=device)
+    server = FedVIServer(global_model, clients, device=device, overwrite=overwrite)
+    server.logger._write(f"\n=== START EXPERIMENT === k={k_value}, rep={rep} ===\n")
 
     metrics = server.evaluate_global(
         dataset=testset, batch_size=TRAINING["eval_batch_size"],
@@ -124,7 +125,8 @@ def main():
         init_state = copy.deepcopy(base_model.state_dict())
 
         for k in KS:
-            curve = run_fedvi_with_k(k, init_state, train_subsets, testset, device)
+            overwrite_flag = (rep == 0 and k == KS[0])
+            curve = run_fedvi_with_k(k, init_state, train_subsets, testset, device, rep=rep+1, overwrite=overwrite_flag)
             all_results[k].append(curve)
 
     plt.figure(figsize=(8, 6))
