@@ -15,12 +15,11 @@ class FedVIClient:
         self.batch_size = batch_size
         self.lr = lr
         self.owned_keys = set(owned_keys)
-        self.m_total = int(m_total)   # 总 client 数 m
+        self.m_total = int(m_total)
 
         for n, p in self.model.named_parameters():
             p.requires_grad = (n in self.owned_keys)
 
-        # 存储本轮需要的全局信息
         self._xbar_prev: Dict[str, torch.Tensor] = {}      # \bar{x}^{r-1}
         self._x_prev_block: Dict[str, torch.Tensor] = {}   # x^{r-1,i}
 
@@ -30,12 +29,6 @@ class FedVIClient:
         xbar_prev: Dict[str, torch.Tensor],
         x_prev_block: Dict[str, torch.Tensor],
     ):
-        """
-        每一轮通信时调用：
-          global_state: 全局模型 x^{r-1}
-          xbar_prev:    \bar{x}^{r-1} （所有参数）
-          x_prev_block: client i 的上一轮块参数 x^{r-1,i}
-        """
         to_dev = {k: v.to(self.device) for k, v in global_state.items()}
         self.model.load_state_dict(to_dev, strict=True)
 
@@ -67,7 +60,7 @@ class FedVIClient:
         loader = self._loader()
 
         m = self.m_total
-        it = cycle(loader)  # 无限迭代 dataloader，保证能取到 local_steps 个 batch
+        it = cycle(loader)
 
         for step in range(local_steps):
             x, y = next(it)
@@ -99,33 +92,10 @@ class FedVIClient:
 
             opt.step()
 
-            # ===== 记录更新后的 y：只取自己一行 + 对应 bias（784 + 1 = 785）=====
             sd = self.model.state_dict()
-
-            # 找第一组 2D 权重和匹配的 1D bias（比如 Linear 的 weight[10,784] / bias[10]）
-            weight_key, bias_key, out_features = None, None, None
-            for k, t in sd.items():
-                if t.ndim == 2:              # 例如 [num_classes, in_dim]
-                    weight_key = k
-                    out_features = t.shape[0]
-                    break
-            if weight_key is not None:
-                for k, t in sd.items():
-                    if t.ndim == 1 and t.shape[0] == out_features:
-                        bias_key = k
-                        break
-
-            # 取本 client 的行（row = cid % out_features）
-            if weight_key is not None and bias_key is not None:
-                row = int(self.cid % out_features)
-                w_row = sd[weight_key][row, :].detach().view(-1).cpu()
-                b_one = sd[bias_key][row].detach().view(-1).cpu()
-                y_vec = torch.cat([w_row, b_one])          # 785 维
-            else:
-                # 兜底：如果没找到，就退回到旧逻辑（整层向量化）
-                y_vec = vectorize_owned(sd, self.owned_keys)
-
-            vec_dim = int(y_vec.numel())                   # 现在应为 785
+            y_vec = vectorize_owned(sd, self.owned_keys)
+            vec_dim = int(y_vec.numel())
+            
             rec = make_trace_entry(step + 1, y_vec, max_show=5)
             if rec:
                 trace.append(rec)

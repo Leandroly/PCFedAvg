@@ -3,7 +3,6 @@ import os
 import torch
 from typing import Dict, Iterable, List
 
-# --------- 客户端本地：把自有参数拼成向量 + 生成一步的记录 ---------
 def vectorize_owned(state_dict: Dict[str, torch.Tensor], owned_keys: Iterable[str]) -> torch.Tensor:
     vecs = []
     for k in owned_keys:
@@ -18,8 +17,6 @@ def make_trace_entry(step_id: int, vec: torch.Tensor, max_show: int = 5) -> Dict
     head = [float(x) for x in vec[:max_show].tolist()]
     return {"k": int(step_id), "norm": float(vec.norm().item()), "head": head}
 
-
-# --------- 服务器侧：轮次级别的记录器 ---------
 class TraceLogger:
     def __init__(self, log_file: str = "fedvi_trace.log", overwrite: bool = True):
         os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
@@ -28,17 +25,14 @@ class TraceLogger:
             with open(self.log_file, "w", encoding="utf-8") as f:
                 f.write("=== FedVI Trace Log ===\n")
 
-    # 只写文件
     def _write(self, msg: str):
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(msg + "\n")
 
-    # 终端 + 文件（摘要用）
     def _log(self, msg: str):
         print(msg)
         self._write(msg)
 
-    # 只写文件（矩阵用）
     def _log_file_only(self, msg: str):
         self._write(msg)
 
@@ -55,7 +49,6 @@ class TraceLogger:
             f"head0: {first['head']} -> headK: {last['head']}"
         )
 
-    # —— 矩阵视图：只写入文件，不在终端打印 ——
     def write_matrix_style(self, round_id: int, traces_by_client: Dict[int, List[Dict]],
                            value: str = "norm", orientation: str = "rows=steps"):
         self._log_file_only(f"[MATRIX] round={round_id} value={value} orientation={orientation}")
@@ -101,11 +94,6 @@ class TraceLogger:
     def log_round(self, round_id: int, payloads: List[Dict], *,
               all_client_ids: List[int], vec_dim: int,
               baselines: Dict[int, Dict], step_count: int):
-        """
-        baselines[cid] = {"norm": float, "head": List[float]}
-        终端：打印形状、Selected/Not selected 列表 + 两类 clients 的摘要 TRACE
-        文件：写入包含所有 clients 的矩阵（未选中的用“静止轨迹”补全）
-        """
         selected = sorted(p["cid"] for p in payloads)
         all_cids = sorted(all_client_ids)
         not_selected = [c for c in all_cids if c not in selected]
@@ -117,12 +105,10 @@ class TraceLogger:
         self._log(f"[Selected] {selected}")
         self._log(f"[Not selected] {not_selected}")
 
-        # 已选中的：真实 trace
         traces_by_client = {p["cid"]: p.get("trace", []) for p in payloads}
         for cid in selected:
             self.print_summary(cid, traces_by_client.get(cid, []), step_count = step_count)
 
-        # 未选中的：打印摘要（steps = step_count，首尾相同）
         for cid in not_selected:
             b = baselines.get(cid, None)
             if b is None:
@@ -136,8 +122,6 @@ class TraceLogger:
 
         self._log(f"=== End Round {round_id} ===")
 
-        # ===== 仅写文件：矩阵（包含所有 clients；未选中的用静止轨迹补齐）=====
-        # 先复制真实的，再为未选中的合成静止轨迹
         full_traces = dict(traces_by_client)
         for cid in not_selected:
             b = baselines.get(cid, None)
@@ -145,12 +129,10 @@ class TraceLogger:
                 continue
             v = b["norm"]
             head = b["head"]
-            # 合成长度为 step_count 的“静止轨迹”
             full_traces[cid] = [
                 {"k": k, "norm": float(v), "head": head} for k in range(1, step_count + 1)
             ]
 
-        # 写入矩阵（行=steps，列=所有 clients）
         self.write_matrix_style(
             round_id,
             full_traces,
