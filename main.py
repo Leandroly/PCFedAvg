@@ -10,9 +10,8 @@ from src.server.FedVI import FedVIServer
 from generate_data import mnist_subsets
 
 SAMPLE_ROUNDS = [0, 10, 20, 30, 40, 50]
-KS = [2, 5, 10]
+KS = [1, 5, 10]
 REPEATS = 2
-
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -20,7 +19,6 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-
 
 def _eta_schedule(r: int) -> float:
     return 0.2
@@ -62,6 +60,7 @@ def run_fedvi_with_k(k_value, init_state, train_subsets, testset, device, rep, o
         for i in range(DATASET["num_clients"])
     ]
     server = FedVIServer(global_model, clients, device=device, overwrite=overwrite)
+    server.log_round0()
     server.logger._write(f"\n=== START EXPERIMENT === k={k_value}, rep={rep} ===\n")
 
     metrics = server.evaluate_global(

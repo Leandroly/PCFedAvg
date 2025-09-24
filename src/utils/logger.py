@@ -41,7 +41,8 @@ class TraceLogger:
             steps = 0 if step_count is None else int(step_count)
             self._log(f"[TRACE] cid={cid} | steps={steps} | norm: - -> - | head0: [] -> headK: []")
             return
-        first, last = trace[0], trace[-1]
+        first = min(trace, key=lambda e: e["k"])
+        last = max(trace, key=lambda e: e["k"])
         steps = int(step_count) if step_count is not None else len(trace)
         self._log(
             f"[TRACE] cid={cid} | steps={steps} | "
@@ -53,7 +54,9 @@ class TraceLogger:
                            value: str = "norm", orientation: str = "rows=steps"):
         self._log_file_only(f"[MATRIX] round={round_id} value={value} orientation={orientation}")
         cids = sorted(traces_by_client.keys())
-        max_len = max((len(traces_by_client[c]) for c in cids), default=0)
+        all_ks = [e["k"] for c in cids for e in traces_by_client[c]]
+        k_min = 0 if not all_ks else min(all_ks)
+        k_max = 0 if not all_ks else max(all_ks)
 
         def get_val(e):
             return e.get(value, None)
@@ -63,26 +66,23 @@ class TraceLogger:
             sep = "-" * len(header)
             self._log_file_only(header)
             self._log_file_only(sep)
-            for k in range(1, max_len + 1):
+            for k in range(k_min, k_max + 1):
                 row_vals = []
                 for c in cids:
                     tr = traces_by_client[c]
-                    if k <= len(tr):
-                        v = get_val(tr[k - 1])
-                        cell = f"{v:.6f}" if isinstance(v, float) else str(v)
-                    else:
-                        cell = ""
+                    v = next((e.get(value) for e in tr if e["k"] == k), None)
+                    cell = f"{v:.6f}" if isinstance(v, float) else ("" if v is None else str(v))
                     row_vals.append(cell.rjust(12))
                 self._log_file_only(f"{str(k).rjust(4)}  | " + " | ".join(row_vals))
         else:  # rows=clients
-            header = "client ".ljust(8) + " | " + " | ".join([f"k={k}".center(12) for k in range(1, max_len + 1)])
+            header = "client ".ljust(8) + " | " + " | ".join([f"k={k}".center(12) for k in range(k_min, k_max + 1)])
             sep = "-" * len(header)
             self._log_file_only(header)
             self._log_file_only(sep)
             for c in cids:
                 tr = traces_by_client[c]
                 row_vals = []
-                for k in range(1, max_len + 1):
+                for k in range(k_min, k_max + 1):
                     if k <= len(tr):
                         v = get_val(tr[k - 1])
                         cell = f"{v:.6f}" if isinstance(v, float) else str(v)
@@ -130,7 +130,7 @@ class TraceLogger:
             v = b["norm"]
             head = b["head"]
             full_traces[cid] = [
-                {"k": k, "norm": float(v), "head": head} for k in range(1, step_count + 1)
+                {"k": k, "norm": float(v), "head": head} for k in range(0, step_count + 1)
             ]
 
         self.write_matrix_style(

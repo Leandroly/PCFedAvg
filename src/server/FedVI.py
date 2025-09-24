@@ -37,17 +37,46 @@ class FedVIServer:
         return xbar
 
     def _broadcast_round_state(self, selected_clients: List, xbar: Dict[str, torch.Tensor]):
-        global_state = {k: v.to(self.device) for k, v in xbar.items()}
+        #global_state = {k: v.to(self.device) for k, v in xbar.items()}
         for c in selected_clients:
             x_prev_block = self.blocks[c.cid]
             c.set_block_weights(
-                global_state=global_state,
+                #global_state=global_state,
                 xbar_prev=xbar,
                 x_prev_block=x_prev_block,
             )
 
     def overwrite_block(self, cid: int, new_state: Dict[str, torch.Tensor]):
         self.blocks[cid] = {k: v.detach().cpu().clone() for k, v in new_state.items()}
+
+    def log_round0(self, max_show: int = 5):
+        """把 Round 0 的初始化参数写到 log 文件和终端"""
+        all_cids = [c.cid for c in self.clients]
+
+        baselines = {}
+        vec_dim0 = 0
+        for c in self.clients:
+            cid = c.cid
+            state = self.blocks[cid]   # 初始 state_dict
+            vec = vectorize_owned(state, c.owned_keys)
+            if vec_dim0 == 0:
+                vec_dim0 = int(vec.numel())
+            head = [float(x) for x in vec[:max_show].tolist()] if vec.numel() > 0 else []
+            baselines[cid] = {
+                "norm": float(vec.norm().item()) if vec.numel() > 0 else 0.0,
+                "head": head,
+            }
+
+        # Round 0 没有选中 client，payloads=[]
+        self.logger.log_round(
+            round_id=0,
+            payloads=[],
+            all_client_ids=all_cids,
+            vec_dim=vec_dim0,
+            baselines=baselines,
+            step_count=0,
+        )
+
 
     def run_round(
         self,

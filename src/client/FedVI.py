@@ -25,12 +25,12 @@ class FedVIClient:
 
     def set_block_weights(
         self,
-        global_state: Dict[str, torch.Tensor],
+        #global_state: Dict[str, torch.Tensor],
         xbar_prev: Dict[str, torch.Tensor],
         x_prev_block: Dict[str, torch.Tensor],
     ):
-        to_dev = {k: v.to(self.device) for k, v in global_state.items()}
-        self.model.load_state_dict(to_dev, strict=True)
+        #to_dev = {k: v.to(self.device) for k, v in global_state.items()}
+        #self.model.load_state_dict(to_dev, strict=True)
 
         self._xbar_prev = {k: v.detach().clone().to(self.device) for k, v in xbar_prev.items()}
         self._x_prev_block = {k: v.detach().clone().to(self.device) for k, v in x_prev_block.items()}
@@ -61,6 +61,14 @@ class FedVIClient:
 
         m = self.m_total
         it = cycle(loader)
+
+        # k=0
+        sd0 = self.model.state_dict()
+        y_vec0 = vectorize_owned(sd0, self.owned_keys)
+        vec_dim = int(y_vec0.numel())
+        rec0 = make_trace_entry(0, y_vec0, max_show=5)
+        if rec0:
+            trace.append(rec0)
 
         for step in range(local_steps):
             x, y = next(it)
@@ -95,7 +103,7 @@ class FedVIClient:
             sd = self.model.state_dict()
             y_vec = vectorize_owned(sd, self.owned_keys)
             vec_dim = int(y_vec.numel())
-            
+
             rec = make_trace_entry(step + 1, y_vec, max_show=5)
             if rec:
                 trace.append(rec)
