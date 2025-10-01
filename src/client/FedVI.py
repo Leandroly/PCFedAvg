@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data import DataLoader
 from copy import deepcopy
-from typing import Dict
+from typing import Dict, List
 from src.utils.logger import vectorize_owned, make_trace_entry
 from itertools import cycle
 
@@ -22,18 +22,34 @@ class FedVIClient:
 
         self._xbar_prev: Dict[str, torch.Tensor] = {}      # \bar{x}^{r-1}
         self._x_prev_block: Dict[str, torch.Tensor] = {}   # x^{r-1,i}
+        self._others_prev_blocks: List[Dict[str, torch.Tensor]] | None = None
 
     def set_block_weights(
         self,
         #global_state: Dict[str, torch.Tensor],
         xbar_prev: Dict[str, torch.Tensor],
         x_prev_block: Dict[str, torch.Tensor],
+        others_prev_blocks: List[Dict[str, torch.Tensor]] | None = None,
     ):
         #to_dev = {k: v.to(self.device) for k, v in global_state.items()}
         #self.model.load_state_dict(to_dev, strict=True)
 
         self._xbar_prev = {k: v.detach().clone().to(self.device) for k, v in xbar_prev.items()}
         self._x_prev_block = {k: v.detach().clone().to(self.device) for k, v in x_prev_block.items()}
+        if others_prev_blocks is not None:
+            self._others_prev_blocks = [
+                {k: v.detach().clone().to(self.device) for k, v in row.items()}
+                for row in others_prev_blocks
+            ]
+
+    def update_from_global(self, global_blocks: List[Dict[str, torch.Tensor]]):
+        cache = []
+        for j, row in enumerate(global_blocks):
+            if j == self.cid:
+                cache.append(self._x_prev_block)
+            else:
+                cache.append({k: v.detach().clone().to(self.device) for k, v in row.items()})
+        self._others_prev_blocks = cache
 
     def get_block_state(self) -> Dict[str, torch.Tensor]:
         sd = self.model.state_dict()

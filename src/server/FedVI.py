@@ -37,14 +37,18 @@ class FedVIServer:
         return xbar
 
     def _broadcast_round_state(self, selected_clients: List, xbar: Dict[str, torch.Tensor]):
-        #global_state = {k: v.to(self.device) for k, v in xbar.items()}
         for c in selected_clients:
             x_prev_block = self.blocks[c.cid]
+            others = [self.blocks[j] for j in range(len(self.blocks)) if j != c.cid]
             c.set_block_weights(
-                #global_state=global_state,
                 xbar_prev=xbar,
                 x_prev_block=x_prev_block,
+                others_prev_blocks=others,
             )
+    
+    def _broadcast_global_snapshot(self):
+        for c in self.clients:
+            c.update_from_global(self.blocks)
 
     def overwrite_block(self, cid: int, new_state: Dict[str, torch.Tensor]):
         self.blocks[cid] = {k: v.detach().cpu().clone() for k, v in new_state.items()}
@@ -127,6 +131,8 @@ class FedVIServer:
             step_count=local_steps,
         )
 
+        self._broadcast_global_snapshot()
+
         return {
             "selected": [p["cid"] for p in payloads],
             "total_samples": sum(p["num_samples"] for p in payloads),
@@ -158,3 +164,39 @@ class FedVIServer:
             "accuracy": (correct / total) if total > 0 else 0.0,
             "num_samples": total,
         }
+
+    @torch.no_grad()
+    def evaluate_locals(self, *, batch_size: int, device: str, loss_fn):
+        dev = torch.device(device)
+        model = self.global_model
+        results = []
+
+        for c in self.clients:
+            # 加载该 client 自己的参数
+            state_c = {k: v.to(self.device) for k, v in self.blocks[c.cid].items()}
+            model.load_state_dict(state_c, strict=True)
+            model.eval()
+
+            # 用该 client 的本地数据评估
+            loader = torch.utils.data.DataLoader(
+                c.dataset, batch_size=batch_size, shuffle=False, num_workers=0
+            )
+            total, correct, total_loss = 0, 0, 0.0
+            for x, y in loader:
+                x, y = x.to(dev), y.to(dev)
+                logits = model(x)
+                loss = loss_fn(logits, y)
+                total_loss += loss.item() * y.size(0)
+                pred = logits.argmax(dim=1)
+                correct += (pred == y).sum().item()
+                total += y.size(0)
+
+            results.append({
+                "cid": c.cid,
+                "loss": (total_loss / total) if total > 0 else 0.0,
+                "accuracy": (correct / total) if total > 0 else 0.0,
+                "num_samples": total,
+            })
+
+        return results
+    
