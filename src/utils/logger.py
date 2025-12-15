@@ -1,7 +1,7 @@
-# src/utils/logger.py
 import os
 import torch
 from typing import Dict, Iterable, List
+
 
 def vectorize_owned(state_dict: Dict[str, torch.Tensor], owned_keys: Iterable[str]) -> torch.Tensor:
     vecs = []
@@ -11,11 +11,13 @@ def vectorize_owned(state_dict: Dict[str, torch.Tensor], owned_keys: Iterable[st
             vecs.append(v.detach().view(-1).cpu())
     return torch.cat(vecs) if vecs else torch.empty(0)
 
+
 def make_trace_entry(step_id: int, vec: torch.Tensor, max_show: int = 5) -> Dict:
     if vec.numel() == 0:
         return {}
     head = [float(x) for x in vec[:max_show].tolist()]
     return {"k": int(step_id), "norm": float(vec.norm().item()), "head": head}
+
 
 class TraceLogger:
     def __init__(self, log_file: str = "fedvi_trace.log", overwrite: bool = True):
@@ -50,8 +52,13 @@ class TraceLogger:
             f"head0: {first['head']} -> headK: {last['head']}"
         )
 
-    def write_matrix_style(self, round_id: int, traces_by_client: Dict[int, List[Dict]],
-                           value: str = "norm", orientation: str = "rows=steps"):
+    def write_matrix_style(
+        self,
+        round_id: int,
+        traces_by_client: Dict[int, List[Dict]],
+        value: str = "norm",
+        orientation: str = "rows=steps",
+    ):
         self._log_file_only(f"[MATRIX] round={round_id} value={value} orientation={orientation}")
         cids = sorted(traces_by_client.keys())
         all_ks = [e["k"] for c in cids for e in traces_by_client[c]]
@@ -91,9 +98,18 @@ class TraceLogger:
                     row_vals.append(cell.rjust(12))
                 self._log_file_only(f"{str(c).rjust(6)}  | " + " | ".join(row_vals))
 
-    def log_round(self, round_id: int, payloads: List[Dict], *,
-              all_client_ids: List[int], vec_dim: int,
-              baselines: Dict[int, Dict], step_count: int):
+    def log_round(
+        self,
+        round_id: int,
+        payloads: List[Dict],
+        *,
+        all_client_ids: List[int],
+        vec_dim: int,
+        baselines: Dict[int, Dict],
+        step_count: int,
+        eta_r: float | None = None,
+        rho: float | None = None,
+    ):
         selected = sorted(p["cid"] for p in payloads)
         all_cids = sorted(all_client_ids)
         not_selected = [c for c in all_cids if c not in selected]
@@ -102,12 +118,14 @@ class TraceLogger:
 
         self._log(f"=== Round {round_id} Trace Summary ===")
         self._log(f"[Y shape] m x n = {m} x {n}")
+        if eta_r is not None or rho is not None:
+            self._log(f"[Hyperparams] eta_r={eta_r} rho={rho}")
         self._log(f"[Selected] {selected}")
         self._log(f"[Not selected] {not_selected}")
 
         traces_by_client = {p["cid"]: p.get("trace", []) for p in payloads}
         for cid in selected:
-            self.print_summary(cid, traces_by_client.get(cid, []), step_count = step_count)
+            self.print_summary(cid, traces_by_client.get(cid, []), step_count=step_count)
 
         for cid in not_selected:
             b = baselines.get(cid, None)

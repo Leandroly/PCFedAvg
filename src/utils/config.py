@@ -18,7 +18,7 @@ MODEL = {
 TRAINING = {
     "seed": 0,
     "device": "cuda",
-    "rounds": 50,
+    "rounds": 100,
     "fraction": 0.2,
     "local_epochs": 2,
     "train_batch_size": 64,
